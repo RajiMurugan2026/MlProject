@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StudyScope | Class 10 CBSE AI Tutor</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;600&display=swap');
+        body { font-family: 'Inter', sans-serif; background: #fdfdfd; }
+        .arxiv-header { font-family: 'Libre Baskerville', serif; border-bottom: 1px solid #eee; }
+        .sidebar { border-right: 1px solid #eee; }
+        .chat-sidebar { border-left: 1px solid #eee; }
+        .pdf-canvas { max-width: 100%; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        #mindmap-layer, #presentation-layer { position: absolute; inset: 0; display: none; background: white; z-index: 50; }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+
+    <header class="arxiv-header p-4 flex justify-between items-center bg-white">
+        <h1 class="text-2xl italic font-bold text-gray-900 tracking-tight">StudyScope <span class="text-xs font-normal not-italic text-gray-500 uppercase tracking-widest">v1.0 (Class 10 AI)</span></h1>
+        <div class="flex items-center gap-3">
+            <input type="password" id="api-key" placeholder="Enter Gemini API Key" class="px-3 py-1 border rounded text-sm w-48">
+            <div id="status-indicator" class="w-3 h-3 rounded-full bg-gray-300"></div>
+            <button onclick="connectApi()" class="px-4 py-1 bg-gray-900 text-white text-sm rounded hover:bg-black">Connect</button>
+        </div>
+    </header>
+
+    <main class="flex-1 flex overflow-hidden relative">
+        <aside class="sidebar w-64 p-4 overflow-y-auto">
+            <h2 class="text-sm font-semibold uppercase text-gray-500 mb-4">Course Material</h2>
+            <input type="file" id="pdf-upload" multiple accept="application/pdf" class="mb-4 text-xs w-full">
+            <ul id="doc-list" class="space-y-2 text-sm"></ul>
+        </aside>
+
+        <section class="flex-1 overflow-y-auto p-8 flex flex-col items-center bg-gray-50" id="viewer">
+            <div id="nav-controls" class="mb-4 flex gap-4 hidden">
+                <button onclick="changePage(-1)" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-100">Previous</button>
+                <span id="page-indicator" class="self-center text-sm font-medium">Page 1</span>
+                <button onclick="changePage(1)" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-100">Next</button>
+            </div>
+            <div id="canvas-wrapper" class="w-full flex justify-center">
+                <canvas id="pdf-canvas" class="pdf-canvas"></canvas>
+            </div>
+            
+            <div id="mindmap-layer">
+                <div class="p-4 absolute top-0 left-0 z-10 flex gap-2">
+                    <button onclick="closeMindmap()" class="bg-red-500 text-white px-4 py-2 rounded">Close</button>
+                    <span class="text-xs text-gray-400 bg-white p-2 rounded border">Click sub-topics to see details</span>
+                </div>
+                <canvas id="map-canvas" class="w-full h-full"></canvas>
+            </div>
+            
+            <div id="presentation-layer" class="p-12 flex flex-col items-center justify-center text-center">
+                <h2 id="slide-title" class="text-3xl font-bold mb-6 text-blue-900"></h2>
+                <div id="slide-content" class="text-xl text-gray-800 max-w-3xl leading-relaxed bg-gray-50 p-8 rounded-lg shadow-inner"></div>
+                <div class="mt-12 flex gap-4 text-sm text-gray-500">
+                    <button onclick="prevSlide()" class="px-4 py-2 border rounded hover:bg-gray-100">← Back</button>
+                    <span id="slide-counter" class="py-2"></span>
+                    <button onclick="nextSlide()" class="px-4 py-2 border rounded hover:bg-gray-100">Next →</button>
+                    <button onclick="closePresentation()" class="px-4 py-2 bg-red-100 text-red-700 rounded hover:bg-red-200">Exit Presentation</button>
+                </div>
+            </div>
+        </section>
+
+        <aside class="chat-sidebar w-80 flex flex-col bg-white">
+            <div class="p-4 border-b flex gap-2">
+                <button onclick="generateMindmap()" class="text-xs px-2 py-1 bg-blue-50 text-blue-700 border rounded">Mindmap</button>
+                <button onclick="generatePresentation()" class="text-xs px-2 py-1 bg-emerald-50 text-emerald-700 border rounded">Presentation</button>
+            </div>
+            <div id="chat-box" class="flex-1 overflow-y-auto p-4 space-y-4 text-sm"></div>
+            <div class="p-4 border-t">
+                <textarea id="chat-input" class="w-full p-2 border rounded text-sm" placeholder="Ask about the lesson..."></textarea>
+                <button onclick="sendMessage()" class="mt-2 w-full bg-gray-900 text-white py-2 rounded">Ask Scope</button>
+            </div>
+        </aside>
+    </main>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        
+        let apiKey = "", currentDoc = null, currentPage = 1, slides = [], currentSlide = 0;
+        let mindmapData = [];
+        const canvas = document.getElementById('pdf-canvas'), ctx = canvas.getContext('2d');
+        const mapCanvas = document.getElementById('map-canvas'), mCtx = mapCanvas.getContext('2d');
+        let loadedDocs = {};
+
+        function connectApi() {
+            apiKey = document.getElementById('api-key').value;
+            document.getElementById('status-indicator').className = apiKey ? "w-3 h-3 rounded-full bg-green-500" : "w-3 h-3 rounded-full bg-red-500";
+        }
+
+        async function generateMindmap() {
+            if(!currentDoc) return alert("Please select a document first.");
+            document.getElementById('mindmap-layer').style.display = 'block';
+            mapCanvas.width = window.innerWidth; mapCanvas.height = window.innerHeight;
+            
+            let pdf = loadedDocs[currentDoc];
+            mindmapData = [];
+            
+            for (let i = 1; i <= Math.min(pdf.numPages, 5); i++) {
+                let content = await (await pdf.getPage(i)).getTextContent();
+                let lines = content.items.map(s => s.str).filter(s => s.trim().length > 3);
+                mindmapData.push({ title: lines[0] || `Topic ${i}`, desc: lines.slice(1, 4).join(" ") });
+            }
+            drawMindmap();
+        }
+
+        function drawMindmap() {
+            mCtx.fillStyle = '#f8fafc'; mCtx.fillRect(0,0, mapCanvas.width, mapCanvas.height);
+            const cx = mapCanvas.width/2, cy = mapCanvas.height/2;
+            mCtx.fillStyle = '#0f172a'; mCtx.beginPath(); mCtx.arc(cx, cy, 70, 0, Math.PI*2); mCtx.fill();
+            mCtx.fillStyle = '#ffffff'; mCtx.fillText("MAIN TOPIC", cx-30, cy);
+            mindmapData.forEach((item, i) => {
+                let angle = (i / mindmapData.length) * Math.PI * 2;
+                let x = cx + Math.cos(angle) * 250;
+                let y = cy + Math.sin(angle) * 250;
+                mCtx.strokeStyle = '#94a3b8'; mCtx.beginPath(); mCtx.moveTo(cx, cy); mCtx.lineTo(x, y); mCtx.stroke();
+                mCtx.fillStyle = '#3b82f6'; mCtx.beginPath(); mCtx.arc(x, y, 50, 0, Math.PI*2); mCtx.fill();
+                mCtx.fillStyle = '#ffffff'; mCtx.fillText(item.title.substring(0, 10), x-25, y);
+                mCtx.fillStyle = '#334155'; mCtx.fillText(item.desc.substring(0, 20)+"...", x-40, y+70);
+            });
+        }
+
+        async function generatePresentation() {
+            if(!currentDoc) return alert("Please select a document first.");
+            document.getElementById('presentation-layer').style.display = 'flex';
+            let pdf = loadedDocs[currentDoc];
+            slides = [];
+            for (let i = 1; i <= pdf.numPages; i++) {
+                let page = await pdf.getPage(i);
+                let content = await page.getTextContent();
+                let textItems = content.items.map(s => s.str).filter(s => s.trim().length > 2);
+                let title = textItems[0] || `Slide ${i}`;
+                let body = textItems.slice(1, 15).join(" ").substring(0, 400);
+                slides.push({ title: title, text: body || "No detailed text found." });
+            }
+            showSlide(0);
+        }
+
+        function showSlide(idx) {
+            if (slides.length === 0) return;
+            currentSlide = Math.max(0, Math.min(idx, slides.length - 1));
+            document.getElementById('slide-title').innerText = slides[currentSlide].title;
+            document.getElementById('slide-content').innerText = slides[currentSlide].text;
+            document.getElementById('slide-counter').innerText = `Page ${currentSlide + 1} of ${slides.length}`;
+        }
+
+        function nextSlide() { showSlide(currentSlide + 1); }
+        function prevSlide() { showSlide(currentSlide - 1); }
+
+        function closeMindmap() { document.getElementById('mindmap-layer').style.display = 'none'; }
+        function closePresentation() { document.getElementById('presentation-layer').style.display = 'none'; }
+        
+        async function renderPage(docName, pageNum = 1) {
+            const page = await loadedDocs[docName].getPage(pageNum);
+            const viewport = page.getViewport({ scale: 1.2 });
+            canvas.height = viewport.height; canvas.width = viewport.width;
+            await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+            document.getElementById('page-indicator').innerText = `Page ${pageNum}`;
+            document.getElementById('nav-controls').classList.remove('hidden');
+        }
+
+        function changePage(dir) {
+            if (!currentDoc || !loadedDocs[currentDoc]) return;
+            const pdf = loadedDocs[currentDoc];
+            const newPage = currentPage + dir;
+            if (newPage >= 1 && newPage <= pdf.numPages) {
+                currentPage = newPage;
+                renderPage(currentDoc, currentPage);
+            }
+        }
+
+        document.getElementById('pdf-upload').addEventListener('change', (e) => {
+            Array.from(e.target.files).forEach(file => {
+                const reader = new FileReader();
+                reader.onload = async () => {
+                    loadedDocs[file.name] = await pdfjsLib.getDocument(new Uint8Array(reader.result)).promise;
+                    const li = document.createElement('li');
+                    li.className = "cursor-pointer p-1 border-b hover:text-blue-600";
+                    li.innerText = file.name;
+                    li.onclick = () => { currentDoc = file.name; currentPage = 1; renderPage(file.name, 1); };
+                    document.getElementById('doc-list').appendChild(li);
+                };
+                reader.readAsArrayBuffer(file);
+            });
+        });
+
+        function sendMessage() {
+            chatBox.innerHTML += `<div class="p-2 bg-gray-100 rounded">You: ${document.getElementById('chat-input').value}</div>`;
+            chatBox.innerHTML += `<div class="p-2 bg-blue-50 rounded">Scope: Analyzing page ${currentPage}... [Concept found: ${currentDoc ? currentDoc.substring(0,5) : 'N/A'}]</div>`;
+            document.getElementById('chat-input').value = '';
+        }
+        
+        window.addEventListener('keydown', (e) => {
+            if (document.getElementById('presentation-layer').style.display === 'flex') {
+                if (e.key === 'ArrowRight') nextSlide();
+                if (e.key === 'ArrowLeft') prevSlide();
+            }
+        });
+    </script>
+</body>
+</html>
